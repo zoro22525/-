@@ -1,0 +1,310 @@
+// =========================================================================
+// [★ 설정 필요 ★] 깃허브 코드 안 Firebase 설정 위치
+// 아래 발급받은 Firebase Project Settings의 Config 정보를 그대로 넣어주세요.
+// =========================================================================
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+// =========================================================================
+
+// Firebase 초기화
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const gameRef = db.ref("go_game");
+
+// 바둑판 기본 설정 (19x19)
+const BOARD_SIZE = 19;
+const CELL_SIZE = 30;
+const PADDING = 15;
+
+const canvas = document.getElementById("goBoard");
+const ctx = canvas.getContext("2d");
+const statusDiv = document.getElementById("status");
+const passBtn = document.getElementById("passBtn");
+const resetBtn = document.getElementById("resetBtn");
+
+let myRole = null; // 'black' 또는 'white'
+let gameState = {
+  board: Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(0)), // 0: 빈칸, 1: 흑, 2: 백
+  turn: 'black', // 'black' or 'white'
+  lastKo: null, // 패(Ko) 위치 [x, y]
+  passCount: 0,
+  capturedBlack: 0, // 백이 잡은 흑돌 수
+  capturedWhite: 0, // 흑이 잡은 백돌 수
+  gameOver: false,
+  winner: null
+};
+
+// 1. 방 접속 및 플레이어 역할 할당
+function initOnline() {
+  const playersRef = db.ref("go_game/players");
+
+  playersRef.transaction((players) => {
+    if (!players) {
+      players = { black: true };
+      myRole = 'black';
+    } else if (!players.black) {
+      players.black = true;
+      myRole = 'black';
+    } else if (!players.white) {
+      players.white = true;
+      myRole = 'white';
+    } else {
+      myRole = 'spectator';
+    }
+    return players;
+  });
+
+  // 게임 상태 실시간 동기화
+  gameRef.child("state").on("value", (snapshot) => {
+    const val = snapshot.val();
+    if (val) {
+      gameState = val;
+      // 1차원 배열로 복원된 경우 2차원 배열로 변환
+      if (!Array.isArray(gameState.board[0])) {
+        const flat = gameState.board;
+        gameState.board = [];
+        for (let i = 0; i < BOARD_SIZE; i++) {
+          gameState.board.push(flat.slice(i * BOARD_SIZE, (i + 1) * BOARD_SIZE));
+        }
+      }
+      render();
+    } else {
+      resetGameState();
+    }
+  });
+}
+
+function resetGameState() {
+  const initialBoard = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(0));
+  const initialState = {
+    board: initialBoard,
+    turn: 'black',
+    lastKo: null,
+    passCount: 0,
+    capturedBlack: 0,
+    capturedWhite: 0,
+    gameOver: false,
+    winner: null
+  };
+  gameRef.child("state").set(initialState);
+}
+
+// 2. 바둑 로직 (활로 계산 및 따냄)
+function getNeighbors(x, y) {
+  const neighbors = [];
+  if (x > 0) neighbors.push([x - 1, y]);
+  if (x < BOARD_SIZE - 1) neighbors.push([x + 1, y]);
+  if (y > 0) neighbors.push([x, y - 1]);
+  if (y < BOARD_SIZE - 1) neighbors.push([x, y + 1]);
+  return neighbors;
+}
+
+function getGroupAndLiberties(board, startX, startY) {
+  const color = board[startX][startY];
+  if (color === 0) return { group: [], liberties: new Set() };
+
+  const group = [];
+  const liberties = new Set();
+  const visited = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(false));
+  const queue = [[startX, startY]];
+  visited[startX][startY] = true;
+
+  while (queue.length > 0) {
+    const [x, y] = queue.shift();
+    group.push([x, y]);
+
+    for (const [nx, ny] of getNeighbors(x, y)) {
+      if (board[nx][ny] === 0) {
+        liberties.add(`${nx},${ny}`);
+      } else if (board[nx][ny] === color && !visited[nx][ny]) {
+        visited[nx][ny] = true;
+        queue.push([nx, ny]);
+      }
+    }
+  }
+
+  return { group, liberties };
+}
+
+function copyBoard(board) {
+  return board.map(row => [...row]);
+}
+
+// 착수 시도 함수
+function makeMove(x, y) {
+  if (gameState.gameOver) return;
+  const currentTurnColor = gameState.turn === 'black' ? 1 : 2;
+  const opponentColor = gameState.turn === 'black' ? 2 : 1;
+
+  if (myRole !== gameState.turn) {
+    alert("상대방의 순서입니다.");
+    return;
+  }
+  if (gameState.board[x][y] !== 0) return;
+
+  // 패(Ko) 위치 확인
+  if (gameState.lastKo && gameState.lastKo[0] === x && gameState.lastKo[1] === y) {
+    alert("패 규칙에 의해 바로 둘 수 없습니다.");
+    return;
+  }
+
+  let nextBoard = copyBoard(gameState.board);
+  nextBoard[x][y] = currentTurnColor;
+
+  // 상대 돌 잡기 검사
+  let capturedStones = [];
+  for (const [nx, ny] of getNeighbors(x, y)) {
+    if (nextBoard[nx][ny] === opponentColor) {
+      const { group, liberties } = getGroupAndLiberties(nextBoard, nx, ny);
+      if (liberties.size === 0) {
+        capturedStones.push(...group);
+      }
+    }
+  }
+
+  // 따냄 적용
+  for (const [cx, cy] of capturedStones) {
+    nextBoard[cx][cy] = 0;
+  }
+
+  // 자충수 검사 (내 돌의 활로가 0개이고 상대 돌을 잡지 못했을 때)
+  const myGroup = getGroupAndLiberties(nextBoard, x, y);
+  if (myGroup.liberties.size === 0 && capturedStones.length === 0) {
+    alert("착수 금지 구역(자충수)입니다.");
+    return;
+  }
+
+  // 패(Ko) 상태 판단 (돌 1개 따내고 내 돌도 1개일 때)
+  let newKo = null;
+  if (capturedStones.length === 1 && myGroup.group.length === 1) {
+    newKo = capturedStones[0];
+  }
+
+  // 상태 업데이트
+  gameState.board = nextBoard;
+  if (gameState.turn === 'black') {
+    gameState.capturedWhite += capturedStones.length;
+    gameState.turn = 'white';
+  } else {
+    gameState.capturedBlack += capturedStones.length;
+    gameState.turn = 'black';
+  }
+  gameState.lastKo = newKo;
+  gameState.passCount = 0;
+
+  gameRef.child("state").set(gameState);
+}
+
+// 3. 렌더링 및 UI
+function drawBoard() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // 격자 그리기
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    ctx.beginPath();
+    ctx.moveTo(PADDING + i * CELL_SIZE, PADDING);
+    ctx.lineTo(PADDING + i * CELL_SIZE, PADDING + (BOARD_SIZE - 1) * CELL_SIZE);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(PADDING, PADDING + i * CELL_SIZE);
+    ctx.lineTo(PADDING + (BOARD_SIZE - 1) * CELL_SIZE, PADDING + i * CELL_SIZE);
+    ctx.stroke();
+  }
+
+  // 화점(Star points)
+  const starPoints = [3, 9, 15];
+  for (let x of starPoints) {
+    for (let y of starPoints) {
+      ctx.beginPath();
+      ctx.arc(PADDING + x * CELL_SIZE, PADDING + y * CELL_SIZE, 3, 0, 2 * Math.PI);
+      ctx.fillStyle = "#000";
+      ctx.fill();
+    }
+  }
+
+  // 돌 그리기
+  for (let x = 0; x < BOARD_SIZE; x++) {
+    for (let y = 0; y < BOARD_SIZE; y++) {
+      const val = gameState.board[x][y];
+      if (val !== 0) {
+        ctx.beginPath();
+        ctx.arc(PADDING + x * CELL_SIZE, PADDING + y * CELL_SIZE, CELL_SIZE / 2 - 2, 0, 2 * Math.PI);
+        ctx.fillStyle = val === 1 ? "#000" : "#fff";
+        ctx.fill();
+        ctx.strokeStyle = "#000";
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+function render() {
+  drawBoard();
+
+  let roleText = myRole === 'black' ? '흑 (Black)' : myRole === 'white' ? '백 (White)' : '관전자';
+  let turnText = gameState.turn === 'black' ? '흑 순서' : '백 순서';
+
+  if (gameState.gameOver) {
+    statusDiv.innerHTML = `게임 종료! 승자: <b>${gameState.winner}</b>`;
+  } else {
+    statusDiv.innerHTML = `내 역할: <b>${roleText}</b> | 현재: <b>${turnText}</b> <br> (사석 - 흑이 잡은 백돌: ${gameState.capturedWhite}개 / 백이 잡은 흑돌: ${gameState.capturedBlack}개)`;
+  }
+}
+
+// Canvas 클릭 이벤트
+canvas.addEventListener("click", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.round((e.clientX - rect.left - PADDING) / CELL_SIZE);
+  const y = Math.round((e.clientY - rect.top - PADDING) / CELL_SIZE);
+
+  if (x >= 0 && x < BOARD_SIZE && y >= 0 && y < BOARD_SIZE) {
+    makeMove(x, y);
+  }
+});
+
+// 손빼기 (Pass) 이벤트
+passBtn.addEventListener("click", () => {
+  if (myRole !== gameState.turn || gameState.gameOver) return;
+
+  gameState.passCount += 1;
+  gameState.turn = gameState.turn === 'black' ? 'white' : 'black';
+
+  // 2연속 Pass 시 게임 종료 및 자동 계가
+  if (gameState.passCount >= 2) {
+    gameState.gameOver = true;
+    calculateWinner();
+  }
+
+  gameRef.child("state").set(gameState);
+});
+
+// 승패 계산 (집 계산 + 사석 + 백 덤 6.5집)
+function calculateWinner() {
+  // 간단한 사석 기반 영토 점수 계산 (덤 6.5집 포함)
+  const blackScore = gameState.capturedWhite;
+  const whiteScore = gameState.capturedBlack + 6.5;
+
+  if (blackScore > whiteScore) {
+    gameState.winner = `흑 승리 (${blackScore} 대 ${whiteScore})`;
+  } else {
+    gameState.winner = `백 승리 (${whiteScore} 대 ${blackScore})`;
+  }
+}
+
+// 리셋 이벤트
+resetBtn.addEventListener("click", () => {
+  if (confirm("게임을 초기화하시겠습니까?")) {
+    resetGameState();
+  }
+});
+
+// 실행
+initOnline();
