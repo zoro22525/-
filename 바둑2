@@ -2,14 +2,15 @@
 // [★ 설정 필요 ★] 깃허브 코드 안 Firebase 설정 위치
 // 아래 발급받은 Firebase Project Settings의 Config 정보를 그대로 넣어주세요.
 // =========================================================================
-const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
+const firebaseConfig ={
+  apiKey: "AIzaSyAoKJAWUdc03E2Pjw4Pfccb6RQRqfesW94",
+  authDomain: "qkenr-8c3a7.firebaseapp.com",
+  databaseURL: "https://qkenr-8c3a7-default-rtdb.firebaseio.com",
+  projectId: "qkenr-8c3a7",
+  storageBucket: "qkenr-8c3a7.firebasestorage.app",
+  messagingSenderId: "416009848595",
+  appId: "1:416009848595:web:d675e534c5f0153fccfce6",
+  measurementId: "G-TSBCJNEV6Z"
 };
 // =========================================================================
 
